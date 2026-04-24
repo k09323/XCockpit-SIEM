@@ -477,7 +477,8 @@ npm run dev   # http://localhost:5173
 
 ### 專案授權
 
-Copyright © CyCraft Technology Corporation.
+Copyright © 2026 Larry Lai
+This project is an independent work and is not affiliated with or endorsed by CyCraft Technology Corporation.
 
 ---
 
