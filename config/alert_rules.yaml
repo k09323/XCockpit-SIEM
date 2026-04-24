@@ -1,0 +1,35 @@
+rules:
+  - name: "High Severity EDR Alert"
+    description: "Any EDR alert with severity >= 8"
+    query: "source=edr_alerts severity >= 8 | stats count"
+    condition: "count > 0"
+    severity: "critical"
+    throttle_mins: 30
+
+  - name: "New Malware Detection"
+    description: "EDR alert with malware count > 0"
+    query: "source=edr_alerts malware_count > 0 | stats count"
+    condition: "count > 0"
+    severity: "critical"
+    throttle_mins: 15
+
+  - name: "Multiple Compromised Endpoints"
+    description: "More than 3 compromised endpoints in one EDR alert"
+    query: "source=edr_alerts | stats sum(compromised_computers) as total"
+    condition: "total > 3"
+    severity: "high"
+    throttle_mins: 60
+
+  - name: "New Incident In Progress"
+    description: "New unresolved incident created"
+    query: "source=incidents state = 0 | stats count"
+    condition: "count > 0"
+    severity: "high"
+    throttle_mins: 30
+
+  - name: "High Severity Cyber Report"
+    description: "Cyber Situation Report with severity >= 8"
+    query: "source=cyber_reports severity >= 8 | stats count"
+    condition: "count > 0"
+    severity: "high"
+    throttle_mins: 60

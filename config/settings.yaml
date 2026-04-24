@@ -1,0 +1,33 @@
+server:
+  host: "0.0.0.0"
+  port: 8000
+  workers: 2
+  log_level: "info"
+
+database:
+  path: "./data/siem.duckdb"
+  max_memory: "2GB"
+  threads: 4
+  backup_interval_hours: 24
+  retention_days: 180
+
+auth:
+  secret_key: "${JWT_SECRET}"
+  access_token_expire_minutes: 60
+  refresh_token_expire_days: 7
+
+xcockpit:
+  base_url: "${XCOCKPIT_URL}"           # e.g. https://xcockpit.cycraft.ai
+  customer_key: "${XCOCKPIT_CUSTOMER_KEY}"  # the key in /_api/<customer_key>/...
+  api_key: "${XCOCKPIT_API_KEY}"        # Bearer token
+  pull_interval_seconds: 120            # poll every 2 minutes
+  pull_page_size: 50
+  verify_ssl: true
+
+alerts:
+  evaluation_interval_seconds: 60
+  default_eval_window: "-15m"
+
+ui:
+  static_dir: "./frontend/dist"
+  serve_ui: true
