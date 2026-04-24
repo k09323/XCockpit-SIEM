@@ -1,6 +1,6 @@
 # XCockpit SIEM
 
-> Splunk-like 資安分析平台，整合 CyCraft XCockpit API，提供類 SPL 查詢、儀表板與告警功能
+> 自架資安分析平台，整合 CyCraft XCockpit API，提供查詢導向的分析能力、儀表板與告警機制
 
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.111+-green.svg)](https://fastapi.tiangolo.com/)
@@ -11,13 +11,14 @@
 
 ## 專案簡介
 
-XCockpit SIEM 是一個自架的 Splunk-like 資安分析框架，自動從 CyCraft XCockpit 平台拉取 EDR 告警、Cyber 報表、事件與操作日誌，並提供：
+XCockpit SIEM 是一套自架的資安分析框架，可自動從 CyCraft XCockpit 平台拉取 EDR 告警、資安報表、事件與操作日誌，並提供統一的查詢與分析介面。
 
-- 🔍 **SPL 查詢語言** — 類似 Splunk 的 Search Processing Language，轉譯為 DuckDB SQL
-- 📊 **即時儀表板** — ECharts 圖表，趨勢/分布/Top N 視覺化
-- 🚨 **告警規則引擎** — 自訂查詢條件，定時評估觸發事件
-- 👥 **多使用者管理** — JWT 認證，admin/analyst/viewer 三種角色
-- 🐧 **Linux 單機部署** — 一鍵安裝腳本，systemd 服務
+功能特色
+🔍 查詢語言引擎 — 支援類似管線式（pipeline-based）的查詢語法，並轉譯為 DuckDB SQL 執行
+📊 即時儀表板 — 使用 ECharts 建立趨勢、分布與 Top N 視覺化分析
+🚨 告警規則引擎 — 支援自訂查詢條件與排程執行，自動觸發告警事件
+👥 多使用者管理 — 採用 JWT 認證，支援 admin / analyst / viewer 角色權限控管
+🐧 Linux 單機部署 — 提供一鍵安裝腳本，整合 systemd 服務管理
 
 ---
 
@@ -478,7 +479,10 @@ npm run dev   # http://localhost:5173
 ### 專案授權
 
 Copyright © 2026 Larry Lai
-This project is an independent work and is not affiliated with or endorsed by CyCraft Technology Corporation.
+
+Disclaimer:
+This project is an independent work and is not affiliated with, endorsed by, or associated with any vendor, including CyCraft Technology Corporation.
+All product names, trademarks, and registered trademarks are the property of their respective owners.
 
 ---
 
