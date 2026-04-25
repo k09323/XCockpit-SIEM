@@ -113,16 +113,28 @@ async def _pull_alerts() -> None:
 
 
 async def _pull_incidents() -> None:
-    """Pull Incident list and upsert."""
-    from backend.core.database import update_cursor, upsert_incident, log_ingest
+    """Pull Incident list and upsert.
+
+    NOTE: We do NOT use a `created_after` cursor here, because incident state
+    (InProgress→Investigated→Confirmed→Closed) changes WITHOUT bumping the
+    `created` timestamp. A cursor-based pull would never re-fetch state changes,
+    so the local DB would show stale `state` forever.
+
+    Instead we always re-fetch incidents within a sliding window
+    (`incidents_refresh_window_days`, default 30 days). `upsert_incident()`
+    dedupes by uuid and updates mutable fields (state, note, graph_summary)
+    on existing rows.
+    """
+    from backend.core.database import upsert_incident, log_ingest
     from backend.integrations.xcockpit_client import xcockpit_client
 
     t0 = time.monotonic()
-    since = _cursor_or_default("incidents", default_hours_back=24)
+    refresh_days = getattr(settings.xcockpit, "incidents_refresh_window_days", 30)
+    since_dt = datetime.now(timezone.utc) - timedelta(days=refresh_days)
+    since = since_dt.strftime("%Y-%m-%dT%H:%M:%S")
 
     offset = 0
-    total_new = total_err = total_fetched = 0
-    latest_ts: str | None = None
+    total_new = total_err = total_fetched = total_updated = 0
 
     while True:
         result = await xcockpit_client.get_incident_list(since, offset=offset, limit=50)
@@ -130,13 +142,12 @@ async def _pull_incidents() -> None:
         total_fetched += len(incidents)
 
         for inc in incidents:
-            created = inc.get("created", "")
-            if not latest_ts or created > latest_ts:
-                latest_ts = created
             try:
                 is_new = upsert_incident(inc)
                 if is_new:
                     total_new += 1
+                else:
+                    total_updated += 1
             except Exception as e:
                 logger.error("Incident upsert failed: %s", e)
                 total_err += 1
@@ -145,13 +156,13 @@ async def _pull_incidents() -> None:
             break
         offset += 50
 
-    if latest_ts:
-        update_cursor("incidents", last_timestamp=latest_ts)
-
     duration_ms = int((time.monotonic() - t0) * 1000)
     log_ingest("incident", total_fetched, total_new, total_err, duration_ms)
     if total_fetched:
-        logger.info("Incident pull: %d fetched, %d new, %dms", total_fetched, total_new, duration_ms)
+        logger.info(
+            "Incident pull: %d fetched (new=%d, refreshed=%d, errors=%d), %dms",
+            total_fetched, total_new, total_updated, total_err, duration_ms,
+        )
 
 
 async def _pull_activity_logs() -> None:

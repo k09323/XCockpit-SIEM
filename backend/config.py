@@ -72,6 +72,10 @@ class XCockpitSettings(BaseSettings):
     pull_interval_seconds: int = _y("xcockpit", "pull_interval_seconds", default=120)
     pull_page_size: int = _y("xcockpit", "pull_page_size", default=50)
     verify_ssl: bool = _y("xcockpit", "verify_ssl", default=True)
+    # Sliding window for re-fetching incidents — needed because incident state
+    # (InProgress→Investigated→…) changes WITHOUT bumping `created`, so a
+    # cursor-based pull would never sync state changes. Default 30 days.
+    incidents_refresh_window_days: int = _y("xcockpit", "incidents_refresh_window_days", default=30)
 
     model_config = SettingsConfigDict(env_prefix="XCOCKPIT_", extra="ignore")
 

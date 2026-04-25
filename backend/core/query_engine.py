@@ -413,14 +413,21 @@ def _parse_timechart(parser: SPLParser, ctx: QueryContext) -> None:
         by_field = _safe_field(_strip_quotes(parser.consume()))
 
     tc = ctx.time_col
-    time_bucket = f"time_bucket(INTERVAL '{span_interval}', \"{tc}\") AS \"{tc}\""
+    # Use a synthetic alias `_time` so it does NOT collide with the source
+    # column name (e.g. `report_time`). DuckDB's GROUP BY would otherwise
+    # resolve the colliding alias back to the raw column → one group per row
+    # → timechart degenerates into raw rows. We GROUP BY the bucket expression
+    # itself to be unambiguous.
+    bucket_expr = f"time_bucket(INTERVAL '{span_interval}', \"{tc}\")"
+    bucket_alias = '"_time"'
+    time_bucket = f'{bucket_expr} AS {bucket_alias}'
     if by_field:
         ctx.select_exprs = [time_bucket, by_field, f"{agg_sql} AS {alias}"]
-        ctx.group_by = [f'"{tc}"', by_field]
+        ctx.group_by = [bucket_expr, by_field]
     else:
         ctx.select_exprs = [time_bucket, f"{agg_sql} AS {alias}"]
-        ctx.group_by = [f'"{tc}"']
-    ctx.order_by = [f'"{tc}" ASC']
+        ctx.group_by = [bucket_expr]
+    ctx.order_by = [f"{bucket_expr} ASC"]
 
 
 def _parse_sort(parser: SPLParser, ctx: QueryContext) -> None:

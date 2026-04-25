@@ -23,6 +23,9 @@ xcockpit:
   pull_interval_seconds: 120            # poll every 2 minutes
   pull_page_size: 50
   verify_ssl: true
+  incidents_refresh_window_days: 30     # always re-fetch last N days of incidents
+                                        # so state changes (InProgress→Investigated)
+                                        # propagate even when `created` is unchanged
 
 alerts:
   evaluation_interval_seconds: 60
