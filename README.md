@@ -2,10 +2,50 @@
 
 > 自架資安分析平台，整合 CyCraft XCockpit API，提供查詢導向的分析能力、儀表板與告警機制
 
+[![Version](https://img.shields.io/badge/version-v2.0-brightgreen.svg)](#版本紀錄)
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.111+-green.svg)](https://fastapi.tiangolo.com/)
 [![React](https://img.shields.io/badge/React-18-61dafb.svg)](https://react.dev/)
 [![DuckDB](https://img.shields.io/badge/DuckDB-0.10+-yellow.svg)](https://duckdb.org/)
+
+---
+
+## 版本紀錄
+
+### v2.0 (2026-05-04) — UI 維運強化
+
+第二版重點：把所有「需要 ssh / 改設定檔 / 重啟服務」的維運操作搬到 Web UI，並修掉 v1 的關鍵 bug。
+
+#### 🐛 Bug 修正
+
+| Bug | 影響 | 修法 |
+|------|------|------|
+| **Incident 狀態同步失效** | XCockpit 上將事件從 `InProgress` 改為 `Investigated` 後，Dashboard 圓餅圖仍顯示舊狀態。 | `_pull_incidents` 改為每次重抓最近 30 天（可調），靠 `uuid` UPSERT 同步 `state` 欄位。 |
+| **Timechart GROUP BY alias 衝突** | `timechart span=1d count` 因 alias 與原欄位同名 → DuckDB 把 GROUP BY 解析成原欄位，每筆 alert 自成一群，曲線每次重新整理結果不穩定。 | 改用合成 alias `_time` 並直接 `GROUP BY` bucket 表達式。 |
+| **SPA 路由重新整理 404** | 在 `/login`、`/alerts`、`/settings` 按 F5 → `{"detail":"Not Found"}`。 | FastAPI 加 catch-all：非 `/api/`、`/ws/`、`/assets/` 路徑一律 fallback 到 `index.html`。 |
+| **切換 customer_key 後仍顯示舊資料** | 連線測試成功但 dashboard 不變 — 因為 `pull_cursors` 還停在舊客戶最後時間戳，新客戶較舊事件被略過；舊客戶資料也殘留。 | 偵測 `customer_key` 變更時自動 reset cursors，並可選清空 4 個 data tables；儲存後立刻觸發 pull。 |
+
+#### ✨ 新功能
+
+- **Web UI 編輯 XCockpit 連線參數**：「設定 → XCockpit 連線設定」可直接改 `XCOCKPIT_URL` / `XCOCKPIT_CUSTOMER_KEY` / `XCOCKPIT_API_KEY`，免再 `ssh + 改 .env + 重啟`。API Key 顯示為遮罩（`••••••••abcd`），留空＝不變更。內建「測試連線」按鈕。
+- **可調整登入 Session 時間**：admin 在「設定 → 系統設定」可改 `登入有效時間（小時）`，範圍 1–720h，預設 24h。修改後對下次登入生效，不影響當前 session。
+- **儀表板顯示客戶名稱**：標題旁顯示 `🏢 <CustomerName>`（取自最近一筆事件的 `CustomerName` 欄位），hover 看完整 `customer_key`。
+- **儲存空間剩餘監控**：Dashboard 右上顯示磁碟剩餘百分比，≥25% 綠 / 10–25% 黃 / <10% 紅警示。
+- **修改密碼 / 帳號管理 UI**：admin 可建立 / 刪除帳號（admin / analyst / viewer），所有使用者可改自己的密碼。
+
+#### ⚙️ 部署改善
+
+- `install.sh`：把 `npm ci` 改 `npm install`（不需要 lock file），`.env` 在 frontend build 之前生成
+- `systemd` 服務：`--workers 2` → `--workers 1`（DuckDB 是 single-process file lock）
+- 提供完整 README 與 GitHub repo（`k09323/xcockpit-siem`）
+
+### v1.0 (2026-05-03) — 首版
+
+- FastAPI + DuckDB + React 完整骨架
+- SPL → DuckDB SQL 轉譯（tokenizer + parser + transpiler）
+- XCockpit API 整合：CYCRAFT_E（EDR alerts）、CYCRAFT_C（Cyber reports）、incidents、activity logs
+- 告警規則引擎 + APScheduler 定時評估
+- JWT 認證、systemd 一鍵部署
 
 ---
 
@@ -102,7 +142,7 @@ xcockpit-siem/
 │           ├── Search.jsx        # SPL 查詢頁
 │           ├── Dashboard.jsx     # 儀表板
 │           ├── Alerts.jsx        # 告警規則管理
-│           └── Settings.jsx      # 改密碼 + 帳號管理
+│           └── Settings.jsx      # 改密碼 + 帳號管理 + XCockpit 連線設定 + Session 設定
 ├── data/                         # DuckDB 資料（.gitignore）
 ├── logs/                         # 應用程式 log
 └── systemd/

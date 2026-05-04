@@ -217,6 +217,13 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
     expires_at      TIMESTAMP NOT NULL,
     created_at      TIMESTAMP DEFAULT now()
 );
+
+-- ── System Settings (singleton key/value, admin-editable) ─────────────────
+CREATE TABLE IF NOT EXISTS system_settings (
+    key             VARCHAR PRIMARY KEY,
+    value           VARCHAR NOT NULL,
+    updated_at      TIMESTAMP DEFAULT now()
+);
 """
 
 
@@ -464,6 +471,136 @@ def create_incident(rule_id: str, metric_value: float, details: dict) -> str:
         [rule_id, metric_value, json.dumps(details)],
     ).fetchone()
     return row[0]
+
+
+# ---------------------------------------------------------------------------
+# System settings (admin-editable global config)
+# ---------------------------------------------------------------------------
+
+def get_system_setting(key: str, default: Any = None) -> Any:
+    """Read a system_settings row by key. Returns `default` if missing."""
+    row = _get_conn().execute(
+        "SELECT value FROM system_settings WHERE key = ?", [key]
+    ).fetchone()
+    return row[0] if row else default
+
+
+def set_system_setting(key: str, value: str) -> None:
+    """Upsert a system_settings row."""
+    _get_conn().execute(
+        """INSERT INTO system_settings (key, value, updated_at)
+           VALUES (?, ?, now())
+           ON CONFLICT(key) DO UPDATE SET
+               value = excluded.value,
+               updated_at = now()""",
+        [key, str(value)],
+    )
+
+
+def get_session_hours() -> int:
+    """Return the configured session lifetime in hours (default 24)."""
+    val = get_system_setting("session_hours", default="24")
+    try:
+        return max(1, min(24 * 30, int(val)))  # clamp 1h - 30d
+    except (TypeError, ValueError):
+        return 24
+
+
+def get_customer_name() -> str | None:
+    """Best-effort: derive the customer's display name from the most recently
+    ingested event. XCockpit returns it as `CustomerName` on EDR alerts and
+    `Summary.Customer` on Cyber reports.
+    Returns None if no events have been pulled yet.
+    """
+    conn = _get_conn()
+    for table in ("edr_alerts", "cyber_reports"):
+        try:
+            row = conn.execute(
+                f"SELECT customer_name FROM {table} "
+                f"WHERE customer_name IS NOT NULL AND customer_name != '' "
+                f"ORDER BY ingested_at DESC LIMIT 1"
+            ).fetchone()
+            if row and row[0]:
+                return row[0]
+        except Exception:
+            continue
+    return None
+
+
+def get_xcockpit_config() -> dict:
+    """Return the live XCockpit connection config.
+
+    DB overrides env/YAML so admin can edit via UI without restarting.
+    Empty/missing DB values fall back to the YAML/env defaults loaded at boot.
+    """
+    return {
+        "base_url": (
+            get_system_setting("xcockpit_url") or settings.xcockpit.base_url or ""
+        ).rstrip("/"),
+        "customer_key": (
+            get_system_setting("xcockpit_customer_key")
+            or settings.xcockpit.customer_key
+            or ""
+        ),
+        "api_key": (
+            get_system_setting("xcockpit_api_key")
+            or settings.xcockpit.api_key
+            or ""
+        ),
+    }
+
+
+def set_xcockpit_config(
+    base_url: str | None = None,
+    customer_key: str | None = None,
+    api_key: str | None = None,
+) -> None:
+    """Persist XCockpit connection config. Pass `None` to leave a value untouched."""
+    if base_url is not None:
+        set_system_setting("xcockpit_url", base_url.rstrip("/"))
+    if customer_key is not None:
+        set_system_setting("xcockpit_customer_key", customer_key)
+    if api_key is not None:
+        set_system_setting("xcockpit_api_key", api_key)
+
+
+def reset_pull_cursors() -> int:
+    """Clear all pull_cursors rows so the next pull cycle starts from the
+    default look-back window (e.g. last 24h) instead of resuming from a stale
+    cursor that belongs to a different customer.
+
+    Returns the number of cursor rows that existed before the reset.
+    """
+    conn = _get_conn()
+    n = conn.execute("SELECT COUNT(*) FROM pull_cursors").fetchone()[0]
+    conn.execute("DELETE FROM pull_cursors")
+    return n
+
+
+def clear_xcockpit_data() -> dict:
+    """Drop all rows from the per-customer data tables.
+
+    Used when admin switches `customer_key` — without this the local DB would
+    keep showing the previous customer's events alongside (or instead of) the
+    new customer's data.
+
+    Returns row counts deleted per table.
+    """
+    conn = _get_conn()
+    counts: dict[str, int] = {}
+    for table in ("edr_alerts", "cyber_reports", "incidents",
+                  "incident_events", "activity_logs", "ingest_log"):
+        try:
+            n = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            conn.execute(f"DELETE FROM {table}")
+            counts[table] = n
+        except Exception as e:
+            counts[table] = -1
+            logger.warning("clear_xcockpit_data: %s failed: %s", table, e)
+    # Cursors must also reset so the next pull starts from the look-back window
+    conn.execute("DELETE FROM pull_cursors")
+    counts["pull_cursors"] = 0  # always reset
+    return counts
 
 
 # ---------------------------------------------------------------------------

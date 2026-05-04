@@ -6,8 +6,9 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from backend.api import alerts, auth, dashboards, ingest, query, search, system
@@ -81,9 +82,41 @@ async def live_tail(ws: WebSocket, filter: str = ""):
 
 
 # ---------------------------------------------------------------------------
-# Serve React UI (if built)
+# Serve React UI (SPA) — must be the LAST routes registered
 # ---------------------------------------------------------------------------
+#
+# The React app uses BrowserRouter, so paths like /login, /alerts, /settings
+# only exist client-side. When the user hits Refresh on /alerts, the browser
+# asks the server for "/alerts" — which has no static file → 404.
+#
+# Fix: mount /assets for hashed Vite assets, then add a catch-all that:
+#   1. Serves any real file inside the dist/ directory (favicon, vite.svg, …)
+#   2. Falls back to index.html so the SPA router can take over
+#
+# API routes (/api/*) are registered BEFORE this block, so FastAPI matches
+# them first and the catch-all only fires for non-API paths.
 
 _static_dir = Path(settings.ui.static_dir)
 if settings.ui.serve_ui and _static_dir.exists():
-    app.mount("/", StaticFiles(directory=str(_static_dir), html=True), name="ui")
+    _assets_dir = _static_dir / "assets"
+    if _assets_dir.exists():
+        app.mount("/assets", StaticFiles(directory=str(_assets_dir)), name="assets")
+
+    _index_html = _static_dir / "index.html"
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def spa_fallback(full_path: str):
+        # API & WS paths are matched earlier; if we still see them here they're
+        # genuinely missing — return JSON 404 instead of HTML.
+        if full_path.startswith(("api/", "ws/")):
+            raise HTTPException(status_code=404, detail="Not Found")
+
+        # Real file in dist/ root (favicon.ico, vite.svg, robots.txt, …)
+        candidate = _static_dir / full_path
+        if full_path and candidate.is_file():
+            return FileResponse(candidate)
+
+        # SPA route — let React Router handle it client-side
+        if _index_html.is_file():
+            return FileResponse(_index_html)
+        raise HTTPException(status_code=404, detail="UI not built")

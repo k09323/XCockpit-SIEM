@@ -3,7 +3,8 @@ import ReactECharts from 'echarts-for-react'
 import api from '../api/client.js'
 
 const S = {
-  header: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 },
+  header: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, gap: 16 },
+  headerRight: { display: 'flex', alignItems: 'center', gap: 14 },
   btn: { padding: '6px 16px', background: '#238636', border: 'none', borderRadius: 6, color: '#fff', fontSize: 13, cursor: 'pointer' },
   grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(500px, 1fr))', gap: 16 },
   panel: { background: '#161b22', border: '1px solid #30363d', borderRadius: 8, padding: 16 },
@@ -12,6 +13,43 @@ const S = {
   statBox: { flex: 1, background: '#161b22', border: '1px solid #30363d', borderRadius: 8, padding: '14px 18px' },
   statNum: { fontSize: 28, fontWeight: 700 },
   statLabel: { fontSize: 12, color: '#8b949e', marginTop: 4 },
+  diskBox: {
+    display: 'flex', flexDirection: 'column', gap: 4,
+    background: '#161b22', border: '1px solid #30363d', borderRadius: 6,
+    padding: '6px 12px', minWidth: 200,
+  },
+  diskRow: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, fontSize: 12 },
+  diskBar: { width: '100%', height: 4, background: '#21262d', borderRadius: 2, overflow: 'hidden' },
+  diskBarFill: (color, pct) => ({ width: `${pct}%`, height: '100%', background: color, transition: 'width 0.3s' }),
+}
+
+const DISK_COLOR = { ok: '#3fb950', warn: '#e3b341', critical: '#f85149', unknown: '#8b949e' }
+const DISK_ICON = { ok: '💾', warn: '⚠️', critical: '🚨', unknown: '❓' }
+
+function DiskIndicator({ disk }) {
+  if (!disk) return null
+  const color = DISK_COLOR[disk.level] || DISK_COLOR.unknown
+  const icon = DISK_ICON[disk.level] || DISK_ICON.unknown
+  // Bar fills with USED %, color reflects FREE level
+  const usedPct = Math.max(0, Math.min(100, 100 - disk.free_percent))
+  return (
+    <div
+      style={S.diskBox}
+      title={`${disk.path}\n總空間 ${disk.total_gb} GB\n已使用 ${disk.used_gb} GB\n剩餘 ${disk.free_gb} GB (${disk.free_percent}%)`}
+    >
+      <div style={S.diskRow}>
+        <span style={{ color: '#8b949e' }}>{icon} 儲存空間剩餘</span>
+        <span style={{ color, fontWeight: 700, fontSize: 13 }}>{disk.free_percent}%</span>
+      </div>
+      <div style={S.diskBar}>
+        <div style={S.diskBarFill(color, usedPct)} />
+      </div>
+      <div style={{ ...S.diskRow, color: '#6e7681', fontSize: 11 }}>
+        <span>已使用 {disk.used_gb} GB</span>
+        <span>共 {disk.total_gb} GB</span>
+      </div>
+    </div>
+  )
 }
 
 const PANELS = [
@@ -97,11 +135,13 @@ function PanelChart({ panel, data }) {
 export default function Dashboard() {
   const [panelData, setPanelData] = useState({})
   const [stats, setStats] = useState({})
+  const [disk, setDisk] = useState(null)
+  const [customer, setCustomer] = useState(null)
   const [loading, setLoading] = useState(false)
 
   async function loadAll() {
     setLoading(true)
-    const [statsResults, panelResults] = await Promise.all([
+    const [statsResults, panelResults, statusRes] = await Promise.all([
       Promise.all(STAT_QUERIES.map(async sq => {
         try {
           const res = await api.post('/query', { query: sq.query, time_range: '-24h', limit: 1 })
@@ -117,9 +157,12 @@ export default function Dashboard() {
           return [p.id, { status: 'error', error: e.response?.data?.detail || String(e) }]
         }
       })),
+      api.get('/system/status').then(r => r.data).catch(() => null),
     ])
     setStats(Object.fromEntries(statsResults))
     setPanelData(Object.fromEntries(panelResults))
+    setDisk(statusRes?.disk || null)
+    setCustomer(statusRes?.customer || null)
     setLoading(false)
   }
 
@@ -128,8 +171,25 @@ export default function Dashboard() {
   return (
     <div>
       <div style={S.header}>
-        <h2 style={{ fontSize: 18, fontWeight: 600 }}>Dashboard</h2>
-        <button style={S.btn} onClick={loadAll} disabled={loading}>{loading ? '重新整理…' : '重新整理'}</button>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
+          <h2 style={{ fontSize: 18, fontWeight: 600, margin: 0 }}>Dashboard</h2>
+          {customer && (customer.name || customer.key_short) && (
+            <span
+              style={{
+                fontSize: 13, color: '#79c0ff', fontWeight: 500,
+                background: '#0d1117', border: '1px solid #1f6feb',
+                padding: '2px 10px', borderRadius: 12,
+              }}
+              title={customer.key ? `customer_key: ${customer.key}` : ''}
+            >
+              🏢 {customer.name || `(尚未拉到事件 — ${customer.key_short})`}
+            </span>
+          )}
+        </div>
+        <div style={S.headerRight}>
+          <DiskIndicator disk={disk} />
+          <button style={S.btn} onClick={loadAll} disabled={loading}>{loading ? '重新整理…' : '重新整理'}</button>
+        </div>
       </div>
 
       {/* Stats row */}

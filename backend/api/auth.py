@@ -10,7 +10,12 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
 from backend.config import settings
-from backend.core.database import get_conn
+from backend.core.database import (
+    get_conn,
+    get_session_hours,
+    get_system_setting,
+    set_system_setting,
+)
 from backend.dependencies import require_auth
 
 router = APIRouter()
@@ -32,7 +37,9 @@ class RefreshRequest(BaseModel):
 
 
 def _make_access_token(user_id: str, username: str, role: str) -> str:
-    exp = datetime.now(timezone.utc) + timedelta(minutes=settings.auth.access_token_expire_minutes)
+    # Access token TTL = configured session_hours (admin-editable, default 24h)
+    hours = get_session_hours()
+    exp = datetime.now(timezone.utc) + timedelta(hours=hours)
     return jwt.encode(
         {"sub": user_id, "username": username, "role": role, "exp": exp},
         settings.auth.secret_key,
@@ -41,7 +48,11 @@ def _make_access_token(user_id: str, username: str, role: str) -> str:
 
 
 def _make_refresh_token(user_id: str) -> str:
-    exp = datetime.now(timezone.utc) + timedelta(days=settings.auth.refresh_token_expire_days)
+    # Refresh token TTL = max(7 days, session_hours) so it never expires
+    # before the access token. Admin can extend session beyond 7 days; the
+    # refresh token will keep up.
+    hours = max(get_session_hours(), settings.auth.refresh_token_expire_days * 24)
+    exp = datetime.now(timezone.utc) + timedelta(hours=hours)
     token = jwt.encode(
         {"sub": user_id, "type": "refresh", "exp": exp},
         settings.auth.secret_key,
@@ -203,3 +214,36 @@ def delete_user(user_id: str, payload: dict = Depends(_require_admin)) -> dict:
     conn.execute("DELETE FROM refresh_tokens WHERE user_id = ?", [user_id])
     conn.execute("DELETE FROM users WHERE id = ?", [user_id])
     return {"detail": "User deleted"}
+
+
+# ---------------------------------------------------------------------------
+# System settings (admin only) — currently exposes session_hours
+# ---------------------------------------------------------------------------
+
+class SessionSettingsRequest(BaseModel):
+    session_hours: int
+
+
+@router.get("/system-settings")
+def read_system_settings(_=Depends(_require_admin)) -> dict:
+    return {
+        "session_hours": get_session_hours(),
+        "session_hours_min": 1,
+        "session_hours_max": 24 * 30,  # 30 days
+    }
+
+
+@router.put("/system-settings")
+def update_system_settings(
+    body: SessionSettingsRequest, _=Depends(_require_admin)
+) -> dict:
+    if body.session_hours < 1 or body.session_hours > 24 * 30:
+        raise HTTPException(
+            status_code=400,
+            detail="session_hours must be between 1 and 720 (30 days)",
+        )
+    set_system_setting("session_hours", body.session_hours)
+    return {
+        "detail": "Session settings updated. New value applies to future logins.",
+        "session_hours": get_session_hours(),
+    }

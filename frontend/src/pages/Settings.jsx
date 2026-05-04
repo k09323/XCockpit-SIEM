@@ -201,6 +201,229 @@ function UserManagement() {
   )
 }
 
+// ── XCockpit Connection (admin only) ─────────────────────────────────────────
+function XCockpitConfig() {
+  const [form, setForm] = useState({ base_url: '', customer_key: '', api_key: '' })
+  const [saved, setSaved] = useState({ api_key_masked: '', api_key_set: false, customer_key: '' })
+  const [clearOnSwitch, setClearOnSwitch] = useState(true)
+  const [msg, setMsg] = useState(null)
+  const [loading, setLoading] = useState(false)
+  const [testing, setTesting] = useState(false)
+
+  async function load() {
+    try {
+      const res = await api.get('/system/xcockpit-config')
+      setForm({
+        base_url: res.data.base_url || '',
+        customer_key: res.data.customer_key || '',
+        api_key: '', // never pre-fill — user types only when changing
+      })
+      setSaved({
+        api_key_masked: res.data.api_key_masked,
+        api_key_set: res.data.api_key_set,
+        customer_key: res.data.customer_key || '',
+      })
+    } catch { }
+  }
+
+  useEffect(() => { load() }, [])
+
+  const customerChanging = saved.customer_key && form.customer_key && form.customer_key !== saved.customer_key
+
+  async function test() {
+    setTesting(true); setMsg(null)
+    try {
+      const res = await api.put('/system/xcockpit-config', { ...form, test_only: true })
+      setMsg({ ok: res.data.ok, text: res.data.message })
+    } catch (e) {
+      setMsg({ ok: false, text: e.response?.data?.detail || String(e) })
+    } finally {
+      setTesting(false)
+    }
+  }
+
+  async function save(e) {
+    e.preventDefault()
+    if (customerChanging && clearOnSwitch) {
+      if (!confirm(
+        `將切換 customer_key 為「${form.customer_key}」。\n\n` +
+        `本地將清空：edr_alerts / cyber_reports / incidents / activity_logs。\n` +
+        `Pull cursors 將重置，新客戶資料會在下一個 pull cycle (≤ 2 分鐘) 開始拉取。\n\n` +
+        `確定要繼續？`
+      )) return
+    }
+    setLoading(true); setMsg(null)
+    try {
+      const res = await api.put('/system/xcockpit-config', {
+        ...form,
+        clear_data_on_customer_change: clearOnSwitch,
+      })
+      let text
+      if (res.data.customer_changed) {
+        const cleared = res.data.cleared_rows
+        if (cleared) {
+          const total = Object.entries(cleared)
+            .filter(([k]) => k !== 'pull_cursors')
+            .reduce((s, [, n]) => s + (n > 0 ? n : 0), 0)
+          text = `已切換 customer_key，清空 ${total} 筆舊資料、重置 cursors。新客戶 pull 已觸發。`
+        } else {
+          text = `已切換 customer_key，重置 ${res.data.cursors_reset} 個 cursor。舊資料保留。`
+        }
+        if (!res.data.verified) text += `（注意：連線驗證失敗 — ${res.data.message}）`
+      } else {
+        text = res.data.verified
+          ? `儲存成功，連線驗證通過：${res.data.message}`
+          : `已儲存，但連線驗證失敗：${res.data.message}`
+      }
+      setMsg({ ok: res.data.verified, text })
+      setForm(f => ({ ...f, api_key: '' })) // clear typed key after save
+      load()
+    } catch (e) {
+      setMsg({ ok: false, text: e.response?.data?.detail || String(e) })
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div style={S.section}>
+      <div style={S.h3}>XCockpit 連線設定</div>
+      <form style={S.form} onSubmit={save}>
+        <div>
+          <div style={S.label}>XCOCKPIT_URL</div>
+          <input
+            style={S.input} type="url" required
+            placeholder="https://xcockpit.cycraft.ai"
+            value={form.base_url}
+            onChange={e => setForm(f => ({ ...f, base_url: e.target.value }))}
+          />
+        </div>
+        <div>
+          <div style={S.label}>XCOCKPIT_CUSTOMER_KEY</div>
+          <input
+            style={S.input} required
+            placeholder="例：3a7b1c8d…（XCockpit 提供）"
+            value={form.customer_key}
+            onChange={e => setForm(f => ({ ...f, customer_key: e.target.value }))}
+          />
+        </div>
+        <div>
+          <div style={S.label}>
+            XCOCKPIT_API_KEY
+            {saved.api_key_set && (
+              <span style={{ color: '#3fb950', marginLeft: 8, fontSize: 11 }}>
+                目前：{saved.api_key_masked}（留空＝不變更）
+              </span>
+            )}
+          </div>
+          <input
+            style={S.input} type="password" autoComplete="new-password"
+            placeholder={saved.api_key_set ? '••••••••（不修改就留空）' : 'XCockpit → Security → Create API Token'}
+            value={form.api_key}
+            onChange={e => setForm(f => ({ ...f, api_key: e.target.value }))}
+          />
+          <div style={{ fontSize: 11, color: '#6e7681', marginTop: 4 }}>
+            Header 格式：<code style={{ color: '#79c0ff' }}>Authorization: Token &lt;API_KEY&gt;</code>
+            。儲存後下一次 pull cycle（≤ 2 分鐘）會自動套用新值，免重啟服務。
+          </div>
+        </div>
+
+        {customerChanging && (
+          <div style={{
+            background: '#2d1b1b', border: '1px solid #5c2626', borderRadius: 6,
+            padding: '10px 12px', fontSize: 12, color: '#f0c674',
+          }}>
+            ⚠️ 偵測到 customer_key 變更：<code>{saved.customer_key}</code> → <code>{form.customer_key}</code>
+            <label style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 8, color: '#e6edf3' }}>
+              <input
+                type="checkbox"
+                checked={clearOnSwitch}
+                onChange={e => setClearOnSwitch(e.target.checked)}
+              />
+              <span>儲存時清空舊客戶的本地資料（推薦）</span>
+            </label>
+            <div style={{ fontSize: 11, color: '#8b949e', marginTop: 6, lineHeight: 1.5 }}>
+              不勾選 → 只重置 pull cursors，舊資料保留（會跟新客戶資料混在一起）。<br/>
+              勾選 → 清空 edr_alerts / cyber_reports / incidents / activity_logs，新客戶從零開始。
+            </div>
+          </div>
+        )}
+
+        {msg && <div style={S.msg(msg.ok)}>{msg.text}</div>}
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button style={S.btn()} type="submit" disabled={loading || testing}>
+            {loading ? '儲存中…' : '儲存'}
+          </button>
+          <button
+            style={{ ...S.btn('#1f6feb') }} type="button"
+            onClick={test} disabled={loading || testing}
+          >
+            {testing ? '測試中…' : '測試連線'}
+          </button>
+        </div>
+      </form>
+    </div>
+  )
+}
+
+// ── System Settings (admin only) ─────────────────────────────────────────────
+function SystemSettings() {
+  const [hours, setHours] = useState(24)
+  const [bounds, setBounds] = useState({ min: 1, max: 720 })
+  const [msg, setMsg] = useState(null)
+  const [loading, setLoading] = useState(false)
+
+  async function load() {
+    try {
+      const res = await api.get('/auth/system-settings')
+      setHours(res.data.session_hours)
+      setBounds({ min: res.data.session_hours_min, max: res.data.session_hours_max })
+    } catch { }
+  }
+
+  useEffect(() => { load() }, [])
+
+  async function save(e) {
+    e.preventDefault()
+    setLoading(true); setMsg(null)
+    try {
+      const res = await api.put('/auth/system-settings', { session_hours: Number(hours) })
+      setMsg({ ok: true, text: `登入有效時間已更新為 ${res.data.session_hours} 小時（下次登入起生效）` })
+    } catch (e) {
+      setMsg({ ok: false, text: e.response?.data?.detail || String(e) })
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div style={S.section}>
+      <div style={S.h3}>系統設定</div>
+      <form style={S.form} onSubmit={save}>
+        <div>
+          <div style={S.label}>登入有效時間（小時）</div>
+          <input
+            style={S.input} type="number"
+            min={bounds.min} max={bounds.max} required
+            value={hours}
+            onChange={e => setHours(e.target.value)}
+          />
+          <div style={{ fontSize: 11, color: '#6e7681', marginTop: 4 }}>
+            範圍 {bounds.min}–{bounds.max} 小時。預設 24 小時。
+            修改後僅對「下次登入」生效，目前已登入的 session 不受影響。
+          </div>
+        </div>
+        {msg && <div style={S.msg(msg.ok)}>{msg.text}</div>}
+        <div>
+          <button style={S.btn()} type="submit" disabled={loading}>
+            {loading ? '儲存中…' : '儲存'}
+          </button>
+        </div>
+      </form>
+    </div>
+  )
+}
+
 // ── Main Page ────────────────────────────────────────────────────────────────
 export default function Settings() {
   const role = getRole()
@@ -208,10 +431,12 @@ export default function Settings() {
     <div>
       <h2 style={{ fontSize: 18, fontWeight: 600, marginBottom: 24 }}>設定</h2>
       <ChangePassword />
+      {role === 'admin' && <XCockpitConfig />}
+      {role === 'admin' && <SystemSettings />}
       {role === 'admin' && <UserManagement />}
       {role !== 'admin' && (
         <div style={{ color: '#8b949e', fontSize: 13 }}>
-          帳號管理功能僅限 admin 角色使用。
+          帳號管理、XCockpit 連線設定與系統設定功能僅限 admin 角色使用。
         </div>
       )}
     </div>

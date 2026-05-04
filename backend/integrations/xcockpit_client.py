@@ -39,12 +39,37 @@ logger = logging.getLogger(__name__)
 
 
 class XCockpitClient:
+    """Async client for the XCockpit REST API.
+
+    Connection parameters (URL / customer_key / api_key) are read LIVE from the
+    DB (with env/YAML fallback) on every request, so admins can edit them via
+    the Settings UI and the next pull cycle picks up the new values without a
+    service restart.
+    """
+
     def __init__(self) -> None:
-        self._base_url = settings.xcockpit.base_url.rstrip("/")
-        self._customer_key = settings.xcockpit.customer_key
-        self._api_key = settings.xcockpit.api_key
         self._verify_ssl = settings.xcockpit.verify_ssl
         self._page_size = settings.xcockpit.pull_page_size
+
+    # ------------------------------------------------------------------
+    # Live config getters (DB overrides env/YAML)
+    # ------------------------------------------------------------------
+
+    def _config(self) -> dict[str, str]:
+        from backend.core.database import get_xcockpit_config
+        return get_xcockpit_config()
+
+    @property
+    def _base_url(self) -> str:
+        return self._config()["base_url"]
+
+    @property
+    def _customer_key(self) -> str:
+        return self._config()["customer_key"]
+
+    @property
+    def _api_key(self) -> str:
+        return self._config()["api_key"]
 
     @property
     def _headers(self) -> dict[str, str]:
@@ -55,6 +80,40 @@ class XCockpitClient:
 
     def _url(self, path: str) -> str:
         return f"{self._base_url}/_api/{self._customer_key}/{path}"
+
+    # ------------------------------------------------------------------
+    # Connection test (used by the Settings UI)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    async def test_connection(
+        base_url: str, customer_key: str, api_key: str, verify_ssl: bool = True
+    ) -> tuple[bool, str]:
+        """Try a lightweight call against the alert list endpoint.
+        Returns (ok, message). Does NOT touch DB — caller can preview before saving.
+        """
+        if not (base_url and customer_key and api_key):
+            return False, "URL / customer_key / api_key 都必須填寫"
+        url = f"{base_url.rstrip('/')}/_api/{customer_key}/alert?created=2099-01-01T00:00:00"
+        headers = {"Authorization": f"Token {api_key}", "Accept": "application/json"}
+        try:
+            async with httpx.AsyncClient(verify=verify_ssl, timeout=10) as client:
+                resp = await client.get(url, headers=headers)
+                if resp.status_code == 401:
+                    return False, "API key 驗證失敗 (401 Unauthorized)"
+                if resp.status_code == 404:
+                    return False, "URL 或 customer_key 不正確 (404 Not Found)"
+                if resp.status_code >= 500:
+                    return False, f"XCockpit server 錯誤 (HTTP {resp.status_code})"
+                if resp.status_code >= 400:
+                    return False, f"HTTP {resp.status_code}: {resp.text[:120]}"
+                return True, f"連線成功 (HTTP {resp.status_code})"
+        except httpx.ConnectError as e:
+            return False, f"無法連線到 {base_url}: {e}"
+        except httpx.TimeoutException:
+            return False, "連線逾時 (10s)"
+        except Exception as e:
+            return False, f"錯誤：{e}"
 
     async def health_check(self) -> bool:
         if not self._base_url or not self._customer_key:
